@@ -1,8 +1,9 @@
 import os
+import sys
+from datetime import datetime, timezone
 import ccxt
 import pandas as pd
 import requests
-from datetime import datetime, timezone
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
@@ -12,14 +13,18 @@ def format_utc(ts_ms):
 
 def send_telegram(message):
     if not BOT_TOKEN or not CHAT_ID:
-        print("Missing Telegram Credentials in Secrets")
+        print("Missing BOT_TOKEN or CHAT_ID in Secrets")
         return
     url = f"https://api.telegram.org/bot{BOT_TOKEN}/sendMessage"
     payload = {"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"}
     try:
-        requests.post(url, json=payload, timeout=10)
+        res = requests.post(url, json=payload, timeout=10)
+        if res.status_code == 200:
+            print("Telegram alert sent successfully.")
+        else:
+            print(f"Telegram API Error: {res.text}")
     except Exception as e:
-        print(f"Telegram error: {e}")
+        print(f"Telegram request failed: {e}")
 
 def calculate_fib_levels(low_p, high_p):
     diff = high_p - low_p
@@ -45,6 +50,7 @@ def run_scanners():
             try:
                 ohlcv = exchange.fetch_ohlcv(symbol, timeframe, since=since_ms, limit=300)
                 if not ohlcv or len(ohlcv) < 15:
+                    print(f"Not enough data for {symbol}")
                     continue
 
                 df = pd.DataFrame(ohlcv, columns=['timestamp', 'open', 'high', 'low', 'close', 'volume'])
@@ -84,19 +90,21 @@ def run_scanners():
                             entry = latest_candle['close']
                             sl = min(pullback_df['low'].min(), fibs["0.618"])
                             risk = entry - sl
-                            msg = (
-                                f"🟡 *[SETUP 1] GOLDEN ZONE REVERSAL BUY ({clean_sym})*\n\n"
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day Low: `{day_low_time}` (${day_low_price})\n"
-                                f"• Swing High: `{swing_high_time}` (${swing_high_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Green Bounce)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.500 Zone: `${fibs['0.500']:.2f}`\n"
-                                f"• 0.618 Zone: `${fibs['0.618']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry + risk:.2f}` | TP 2: `${entry + (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
+                            msg_lines = [
+                                f"🟡 *[SETUP 1] GOLDEN ZONE REVERSAL BUY ({clean_sym})*",
+                                "",
+                                "⏰ *Timeline (UTC):*",
+                                f"• Day Low: `{day_low_time}` (${day_low_price:.2f})",
+                                f"• Swing High: `{swing_high_time}` (${swing_high_price:.2f})",
+                                f"• Trigger Time: `{curr_time}` (Green Bounce)",
+                                "",
+                                "📊 *Levels:*",
+                                f"• 0.500 Zone: `${fibs['0.500']:.2f}`",
+                                f"• 0.618 Zone: `${fibs['0.618']:.2f}`",
+                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`",
+                                f"• TP 1: `${entry + risk:.2f}` | TP 2: `${entry + (risk * 2):.2f}`"
+                            ]
+                            send_telegram("\n".join(msg_lines))
 
                         # --- SETUP 2: Deep Retrace to 0.236 Level ---
                         went_below_gz = any(r['low'] < fibs["0.618"] for _, r in pullback_df.iterrows())
@@ -106,18 +114,20 @@ def run_scanners():
                             entry = latest_candle['close']
                             sl = pullback_df['low'].min()
                             risk = entry - sl
-                            msg = (
-                                f"🔵 *[SETUP 2] 0.236 DEEP RETRACE BUY ({clean_sym})*\n\n"
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day Low: `{day_low_time}` (${day_low_price})\n"
-                                f"• Swing High: `{swing_high_time}` (${swing_high_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Green Close > 0.236)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.236 Level: `${fibs['0.236']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry + risk:.2f}` | TP 2: `${entry + (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
+                            msg_lines = [
+                                f"🔵 *[SETUP 2] 0.236 DEEP RETRACE BUY ({clean_sym})*",
+                                "",
+                                "⏰ *Timeline (UTC):*",
+                                f"• Day Low: `{day_low_time}` (${day_low_price:.2f})",
+                                f"• Swing High: `{swing_high_time}` (${swing_high_price:.2f})",
+                                f"• Trigger Time: `{curr_time}` (Green Close > 0.236)",
+                                "",
+                                "📊 *Levels:*",
+                                f"• 0.236 Level: `${fibs['0.236']:.2f}`",
+                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`",
+                                f"• TP 1: `${entry + risk:.2f}` | TP 2: `${entry + (risk * 2):.2f}`"
+                            ]
+                            send_telegram("\n".join(msg_lines))
 
                 # ==========================================
                 # 2. SELL SCENARIOS (Day High -> Swing Low)
@@ -140,19 +150,21 @@ def run_scanners():
                             entry = latest_candle['close']
                             sl = max(pullback_df['high'].max(), fibs["0.618"])
                             risk = sl - entry
-                            msg = (
-                                f"🟡 *[SETUP 1] GOLDEN ZONE REVERSAL SELL ({clean_sym})*\n\n"
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day High: `{day_high_time}` (${day_high_price})\n"
-                                f"• Swing Low: `{swing_low_time}` (${swing_low_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Red Rejection)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.500 Zone: `${fibs['0.500']:.2f}`\n"
-                                f"• 0.618 Zone: `${fibs['0.618']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
+                            msg_lines = [
+                                f"🟡 *[SETUP 1] GOLDEN ZONE REVERSAL SELL ({clean_sym})*",
+                                "",
+                                "⏰ *Timeline (UTC):*",
+                                f"• Day High: `{day_high_time}` (${day_high_price:.2f})",
+                                f"• Swing Low: `{swing_low_time}` (${swing_low_price:.2f})",
+                                f"• Trigger Time: `{curr_time}` (Red Rejection)",
+                                "",
+                                "📊 *Levels:*",
+                                f"• 0.500 Zone: `${fibs['0.500']:.2f}`",
+                                f"• 0.618 Zone: `${fibs['0.618']:.2f}`",
+                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`",
+                                f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk * 2):.2f}`"
+                            ]
+                            send_telegram("\n".join(msg_lines))
 
                         # --- SETUP 2: Deep Retrace to 0.236 Level ---
                         went_above_gz = any(r['high'] > fibs["0.618"] for _, r in pullback_df.iterrows())
@@ -162,18 +174,20 @@ def run_scanners():
                             entry = latest_candle['close']
                             sl = pullback_df['high'].max()
                             risk = sl - entry
-                            msg = (
-                                f"🔵 *[SETUP 2] 0.236 DEEP RETRACE SELL ({clean_sym})*\n\n"
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day High: `{day_high_time}` (${day_high_price})\n"
-                                f"• Swing Low: `{swing_low_time}` (${swing_low_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Red Close < 0.236)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.236 Level: `${fibs['0.236']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
+                            msg_lines = [
+                                f"🔵 *[SETUP 2] 0.236 DEEP RETRACE SELL ({clean_sym})*",
+                                "",
+                                "⏰ *Timeline (UTC):*",
+                                f"• Day High: `{day_high_time}` (${day_high_price:.2f})",
+                                f"• Swing Low: `{swing_low_time}` (${swing_low_price:.2f})",
+                                f"• Trigger Time: `{curr_time}` (Red Close < 0.236)",
+                                "",
+                                "📊 *Levels:*",
+                                f"• 0.236 Level: `${fibs['0.236']:.2f}`",
+                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`",
+                                f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk * 2):.2f}`"
+                            ]
+                            send_telegram("\n".join(msg_lines))
 
             except Exception as e:
                 print(f"Error on {symbol}: {e}")
@@ -183,217 +197,3 @@ def run_scanners():
 
 if __name__ == "__main__":
     run_scanners()
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day Low: `{day_low_time}` (${day_low_price})\n"
-                                f"• Swing High: `{swing_high_time}` (${swing_high_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Green Close > 0.236)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.236 Level: `${fibs['0.236']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry + risk:.2f}` | TP 2: `${entry + (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
-
-                # SELL SCENARIOS
-                if day_high_row.name < len(df) - 4:
-                    sub_df = df.iloc[day_high_row.name:]
-                    swing_low_row = sub_df.loc[sub_df['low'].idxmin()]
-
-                    if swing_low_row.name > day_high_row.name and swing_low_row.name < len(df) - 2:
-                        swing_low_price = swing_low_row['low']
-                        swing_low_time = format_utc(swing_low_row['timestamp'])
-                        fibs = calculate_fib_levels(swing_low_price, day_high_price)
-                        pullback_df = df.iloc[swing_low_row.name:-1]
-
-                        in_golden_zone = any((r['high'] >= fibs["0.500"] and r['high'] <= fibs["0.618"]) for _, r in pullback_df.iterrows())
-                        invalid_gz = any(r['close'] > fibs["0.618"] for _, r in pullback_df.iterrows())
-
-                        if in_golden_zone and not invalid_gz and is_red and latest_candle['close'] < fibs["0.500"]:
-                            entry = latest_candle['close']
-                            sl = max(pullback_df['high'].max(), fibs["0.618"])
-                            risk = sl - entry
-                            msg = (
-                                f"🟡 *[SETUP 1] GOLDEN ZONE REVERSAL SELL ({clean_sym})*\n\n"
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day High: `{day_high_time}` (${day_high_price})\n"
-                                f"• Swing Low: `{swing_low_time}` (${swing_low_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Red Rejection)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.500 Zone: `${fibs['0.500']:.2f}`\n"
-                                f"• 0.618 Zone: `${fibs['0.618']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
-
-                        went_above_gz = any(r['high'] > fibs["0.618"] for _, r in pullback_df.iterrows())
-                        touched_236 = any(r['high'] >= fibs["0.236"] for _, r in pullback_df.iterrows())
-
-                        if went_above_gz and touched_236 and is_red and latest_candle['close'] < fibs["0.236"]:
-                            entry = latest_candle['close']
-                            sl = pullback_df['high'].max()
-                            risk = sl - entry
-                            msg = (
-                                f"🔵 *[SETUP 2] 0.236 DEEP RETRACE SELL ({clean_sym})*\n\n"
-                                f"⏰ *Timeline (UTC):*\n"
-                                f"• Day High: `{day_high_time}` (${day_high_price})\n"
-                                f"• Swing Low: `{swing_low_time}` (${swing_low_price})\n"
-                                f"• Trigger Time: `{curr_time}` (Red Close < 0.236)\n\n"
-                                f"📊 *Levels:*\n"
-                                f"• 0.236 Level: `${fibs['0.236']:.2f}`\n"
-                                f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                                f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk*2):.2f}`"
-                            )
-                            send_telegram(msg)
-
-            except Exception as e:
-                print(f"Error on {symbol}: {e}")
-
-    except Exception as e:
-        print(f"Global runner error: {e}")
-
-if __name__ == "__main__":
-    run_scanners()
-                            f"• Swing High: `{swing_high_time}` (${swing_high_price})\n"
-                            f"• Trigger Time: `{curr_time}` (Green Close > 0.236)\n\n"
-                            f"📊 *Levels:*\n"
-                            f"• 0.236 Level: `${fibs['0.236']:.2f}`\n"
-                            f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                            f"• TP 1: `${entry + risk:.2f}` | TP 2: `${entry + (risk*2):.2f}`"
-                        )
-                        send_telegram(msg)
-                        print(f"Sent Setup 2 BUY on {clean_sym}")
-
-            # ==========================================
-            # 2. SELL SCENARIOS (Day High -> Swing Low)
-            # ==========================================
-            if day_high_row.name < len(df) - 4:
-                sub_df = df.iloc[day_high_row.name:]
-                swing_low_row = sub_df.loc[sub_df['low'].idxmin()]
-
-                if swing_low_row.name > day_high_row.name and swing_low_row.name < len(df) - 2:
-                    swing_low_price = swing_low_row['low']
-                    swing_low_time = format_utc(swing_low_row['timestamp'])
-                    fibs = calculate_fib_levels(swing_low_price, day_high_price)
-                    pullback_df = df.iloc[swing_low_row.name:-1]
-
-                    # --- SETUP 1: Golden Zone Pullback (0.50 - 0.618) ---
-                    in_golden_zone = any((r['high'] >= fibs["0.500"] and r['high'] <= fibs["0.618"]) for _, r in pullback_df.iterrows())
-                    invalid_gz = any(r['close'] > fibs["0.618"] for _, r in pullback_df.iterrows())
-
-                    if in_golden_zone and not invalid_gz and is_red and latest_candle['close'] < fibs["0.500"]:
-                        entry = latest_candle['close']
-                        sl = max(pullback_df['high'].max(), fibs["0.618"])
-                        risk = sl - entry
-                        msg = (
-                            f"🟡 *[SETUP 1] GOLDEN ZONE REVERSAL SELL ({clean_sym})*\n\n"
-                            f"⏰ *Timeline (UTC):*\n"
-                            f"• Day High: `{day_high_time}` (${day_high_price})\n"
-                            f"• Swing Low: `{swing_low_time}` (${swing_low_price})\n"
-                            f"• Trigger Time: `{curr_time}` (Red Rejection from Zone)\n\n"
-                            f"📊 *Levels:*\n"
-                            f"• 0.500 Zone: `${fibs['0.500']:.2f}`\n"
-                            f"• 0.618 Zone: `${fibs['0.618']:.2f}`\n"
-                            f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                            f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk*2):.2f}`"
-                        )
-                        send_telegram(msg)
-                        print(f"Sent Setup 1 SELL on {clean_sym}")
-
-                    # --- SETUP 2: Deep Retrace to 0.236 Level ---
-                    went_above_gz = any(r['high'] > fibs["0.618"] for _, r in pullback_df.iterrows())
-                    touched_236 = any(r['high'] >= fibs["0.236"] for _, r in pullback_df.iterrows())
-
-                    if went_above_gz and touched_236 and is_red and latest_candle['close'] < fibs["0.236"]:
-                        entry = latest_candle['close']
-                        sl = pullback_df['high'].max()
-                        risk = sl - entry
-                        msg = (
-                            f"🔵 *[SETUP 2] 0.236 DEEP RETRACE SELL ({clean_sym})*\n\n"
-                            f"⏰ *Timeline (UTC):*\n"
-                            f"• Day High: `{day_high_time}` (${day_high_price})\n"
-                            f"• Swing Low: `{swing_low_time}` (${swing_low_price})\n"
-                            f"• Trigger Time: `{curr_time}` (Red Close < 0.236)\n\n"
-                            f"📊 *Levels:*\n"
-                            f"• 0.236 Level: `${fibs['0.236']:.2f}`\n"
-                            f"• Entry: `${entry:.2f}` | SL: `${sl:.2f}`\n"
-                            f"• TP 1: `${entry - risk:.2f}` | TP 2: `${entry - (risk*2):.2f}`"
-                        )
-                        send_telegram(msg)
-                        print(f"Sent Setup 2 SELL on {clean_sym}")
-
-        except Exception as e:
-            print(f"Error on {symbol}: {e}")
-
-if __name__ == "__main__":
-    run_scanners()
-                            f"• TP 4 (1:4): `${entry + (risk * 4):.2f}`\n"
-                            f"• TP 5 (1:5): `${entry + (risk * 5):.2f}`\n\n"
-                            f"📜 *Past 2 Signals History:*\n"
-                            f"1️⃣ Prev 1: `{format_utc(df.iloc[-8]['timestamp'])}` | Status: Completed\n"
-                            f"2️⃣ Prev 2: `{format_utc(df.iloc[-15]['timestamp'])}` | Status: Completed"
-                        )
-                        send_telegram_alert(msg)
-                        print(f"Buy Alert Sent for {clean_sym}")
-
-            # --- SETUP 2: SELL SETUP (Day High -> Swing Low -> Pullback -> 0.236 Trigger) ---
-            if day_high_row.name < len(df) - 5:
-                sub_df = df.iloc[day_high_row.name:]
-                swing_low_row = sub_df.loc[sub_df['low'].idxmin()]
-                
-                if swing_low_row.name > day_high_row.name and swing_low_row.name < len(df) - 2:
-                    swing_low_price = swing_low_row['low']
-                    swing_low_time = format_utc(swing_low_row['timestamp'])
-
-                    fibs = calculate_fib_levels(swing_low_price, day_high_price)
-                    pullback_df = df.iloc[swing_low_row.name:-1]
-
-                    # Check Zone Touch (0.50 - 0.618)
-                    touched_zone = any((r['high'] >= fibs["0.500"] and r['high'] <= fibs["0.618"]) for _, r in pullback_df.iterrows())
-                    invalid_close = any(r['close'] > fibs["0.618"] for _, r in pullback_df.iterrows())
-
-                    # Trigger: 0.236 touch/bounce & Red candle closing below 0.236
-                    is_red = latest_closed['close'] < latest_closed['open']
-                    closed_below_236 = (latest_closed['close'] < fibs["0.236"]) and (latest_closed['open'] >= fibs["0.236"] or latest_closed['high'] >= fibs["0.236"])
-
-                    if touched_zone and not invalid_close and is_red and closed_below_236:
-                        zone_candle = pullback_df[pullback_df['high'] >= fibs["0.500"]].iloc[0]
-                        zone_time = format_utc(zone_candle['timestamp'])
-                        
-                        entry = latest_closed['close']
-                        sl = max(pullback_df['high'].max(), fibs["0.618"])
-                        risk = sl - entry
-                        
-                        msg = (
-                            f"🔴 *INTRADAY SELL TRIGGER ({clean_sym})*\n\n"
-                            f"⏰ *Timeline (All in UTC):*\n"
-                            f"• Day High Time: `{day_high_time}` (${day_high_price})\n"
-                            f"• Swing Low Time: `{swing_low_time}` (${swing_low_price})\n"
-                            f"• Zone Entry Time: `{zone_time}` (0.50-0.618 Retrace)\n"
-                            f"• Trigger Candle Time: `{current_close_time}` (Red Close < 0.236)\n\n"
-                            f"📊 *Fibonacci Levels:*\n"
-                            f"• 1.000 (Day High): `${fibs['1.0']:.2f}`\n"
-                            f"• 0.618 SL Zone: `${fibs['0.618']:.2f}`\n"
-                            f"• 0.500 Zone: `${fibs['0.500']:.2f}`\n"
-                            f"• 0.236 Trigger: `${fibs['0.236']:.2f}`\n"
-                            f"• 0.000 (Swing Low): `${fibs['0.0']:.2f}`\n\n"
-                            f"🎯 *Execution & Targets:*\n"
-                            f"• Entry: `${entry:.2f}`\n"
-                            f"• Stop Loss: `${sl:.2f}`\n"
-                            f"• TP 1 (1:1): `${entry - (risk * 1):.2f}`\n"
-                            f"• TP 2 (1:2): `${entry - (risk * 2):.2f}`\n"
-                            f"• TP 3 (1:3): `${entry - (risk * 3):.2f}`\n"
-                            f"• TP 4 (1:4): `${entry - (risk * 4):.2f}`\n"
-                            f"• TP 5 (1:5): `${entry - (risk * 5):.2f}`\n\n"
-                            f"📜 *Past 2 Signals History:*\n"
-                            f"1️⃣ Prev 1: `{format_utc(df.iloc[-8]['timestamp'])}` | Status: Completed\n"
-                            f"2️⃣ Prev 2: `{format_utc(df.iloc[-15]['timestamp'])}` | Status: Completed"
-                        )
-                        send_telegram_alert(msg)
-                        print(f"Sell Alert Sent for {clean_sym}")
-
-        except Exception as e:
-            print(f"Error on {symbol}: {e}")
-
-if __name__ == "__main__":
-    run_fibonacci_scanner()
